@@ -5,6 +5,7 @@
     "QueuePath": "./db/download_queue.txt",
     "Proxy": "",
     "IsNeedVideoProxy": false,
+    "PreferHighResolution": true,
     "ScraperDomain": [
         "www.javbus.com",
         "www.busdmm.ink",

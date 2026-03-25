@@ -112,25 +112,112 @@ class Downloader(ABC):
         return info
 
     
+    def _select_best_resolution(self, url: str) -> Optional[str]:
+        """
+        列出所有可用分辨率，选择最优的一个
+        优先级：分辨率高 > 码率高
+        返回格式：1920x1080 或 None
+        """
+        try:
+            from ..comm import preferHighResolution
+            if not preferHighResolution:
+                return None
+            
+            # 构建列出分辨率的命令
+            list_cmd = f"{download_tool} -u {url} -l -H Referer:http://{self.domain}"
+            logger.debug(f"Listing resolutions: {list_cmd}")
+            
+            # 执行命令并捕获输出
+            import subprocess
+            result = subprocess.run(list_cmd, shell=True, capture_output=True, text=True, timeout=30)
+            
+            output = result.stdout + result.stderr
+            logger.debug(f"Resolution list output:\n{output}")
+            
+            # 解析分辨率和码率信息
+            # 典型格式：
+            # 1920x1080 (1920x1080, 5000k)
+            # 1280x720 (1280x720, 2500k)
+            resolutions = []
+            for line in output.split('\n'):
+                line = line.strip()
+                if 'x' in line and 'k' in line.lower():
+                    try:
+                        # 提取分辨率信息
+                        parts = line.split()
+                        if len(parts) >= 1:
+                            res = parts[0]
+                            # 提取宽高
+                            if 'x' in res:
+                                w, h = map(int, res.split('x'))
+                                area = w * h
+                                
+                                # 提取码率（默认为0）
+                                bitrate = 0
+                                for part in parts:
+                                    if 'k' in part.lower():
+                                        try:
+                                            bitrate = int(part.replace('k', '').replace('K', ''))
+                                            break
+                                        except:
+                                            pass
+                                
+                                resolutions.append({
+                                    'resolution': res,
+                                    'area': area,
+                                    'bitrate': bitrate,
+                                    'width': w,
+                                    'height': h
+                                })
+                    except Exception as e:
+                        logger.debug(f"Failed to parse resolution line '{line}': {e}")
+                        continue
+            
+            if not resolutions:
+                logger.info("No resolutions found in list, using default download")
+                return None
+            
+            # 按分辨率（面积）降序排列，同分辨率下按码率降序排列
+            resolutions.sort(key=lambda x: (x['area'], x['bitrate']), reverse=True)
+            
+            best = resolutions[0]
+            logger.info(f"Best resolution selected: {best['resolution']} ({best['width']}x{best['height']}, {best['bitrate']}k)")
+            
+            return best['resolution']
+            
+        except Exception as e:
+            logger.warning(f"Failed to select best resolution: {e}")
+            return None
+    
     def downloadM3u8(self, url: str, avid: str) -> bool:
         """m3u8视频下载"""
         os.makedirs(os.path.dirname(os.path.join(self.path, avid)), exist_ok=True)
         try:
+            # 尝试选择最优分辨率
+            desired_resolution = self._select_best_resolution(url)
+            
+            # 构建基础命令
+            base_cmd = f"{download_tool} -u {url} -o {os.path.join(self.path, avid, avid+'.ts')}"
+            if desired_resolution:
+                base_cmd += f" -d {desired_resolution}"
+            base_cmd += f" -H Referer:http://{self.domain}"
+            
             if isNeedVideoProxy and self.proxy:
                 logger.info("使用代理")
-                command = f"{download_tool} -u {url} -o {os.path.join(self.path, avid, avid+'.ts')} -p {self.proxy} -H Referer:http://{self.domain}"
+                command = f"{base_cmd} -p {self.proxy}"
             else:
                 logger.info("不使用代理")
-                command = f"{download_tool} -u {url} -o {os.path.join(self.path, avid, avid+'.ts')} -H Referer:http://{self.domain}"
+                command = base_cmd
+            
             logger.debug(command)
             if os.system(command) != 0:
                 # 难顶。。。使用代理下载失败，尝试不用代理；不用代理下载失败，尝试使用代理
                 if not isNeedVideoProxy and self.proxy:
                     logger.info("尝试使用代理")
-                    command = f"{download_tool} -u {url} -o {os.path.join(self.path, avid, avid+'.ts')} -p {self.proxy} -H Referer:http://{self.domain}"
+                    command = f"{base_cmd} -p {self.proxy}"
                 else:
                     logger.info("尝试不使用代理")
-                    command = f"{download_tool} -u {url} -o {os.path.join(self.path, avid, avid+'.ts')} -H Referer:http://{self.domain}"
+                    command = base_cmd
                 logger.debug(f"retry {command}")
                 if os.system(command) != 0:
                     return False
@@ -143,7 +230,8 @@ class Downloader(ABC):
             if os.system(f"rm {os.path.join(self.path, avid, avid+'.ts')}") != 0:
                 return False
             return True
-        except:
+        except Exception as e:
+            logger.error(f"Exception in downloadM3u8: {e}")
             return False
     
     def _fetch_html(self, url: str, referer: str = "") -> Optional[str]:

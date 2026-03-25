@@ -99,7 +99,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/videos", listVideosHandler)
 	mux.HandleFunc("/api/videos/", videoDetailHandler)
-	mux.HandleFunc("/process", processHandler)
+	mux.HandleFunc("/api/addvideo/", addVideoHandler)
 	mux.HandleFunc("/file/", imageHandler)
 
 	// 包装CORS中间件
@@ -535,8 +535,9 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, imagePath)
 }
 
-// processHandler 处理下载请求（简化版本）
-// 支持: curl -X POST http://127.0.0.1:31471/process -d "STCV-336"
+// processHandler 处理下载请求（已弃用）
+// 新的 API 风格：POST /api/addvideo/{videoID}
+// Deprecated: 使用 addVideoHandler 和 /api/addvideo/ 替代
 func processHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		httpError(w, "Method not allowed", http.StatusMethodNotAllowed)

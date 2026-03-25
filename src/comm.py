@@ -29,6 +29,7 @@ downloaded_path = configs["DBPath"]
 queue_path = configs["QueuePath"]
 myproxy = configs["Proxy"]
 isNeedVideoProxy = configs["IsNeedVideoProxy"]
+preferHighResolution = configs.get("PreferHighResolution", True)  # 默认优先高分辨率
 if myproxy == "":
     myproxy = None
 sorted_downloaders = sorted(

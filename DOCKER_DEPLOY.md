@@ -103,16 +103,17 @@ docker-compose up -d nassav-frontend
 Docker 版本的 NASSAV 包含自动队列处理功能：
 
 ### 自动处理
-- **定时检查**：API 服务器每 2 分钟自动检查并处理下载队列
+- **定时检查**：API 服务器每 30 秒自动检查并处理下载队列
 - **并发控制**：确保同时只运行一个下载任务，避免冲突
 - **失败重试**：下载失败的任务会重新加入队列等待下次处理
 
-### 手动触发（可选）
-如果需要立即处理队列，可以通过 API 调用：
+### 添加下载任务
+
+通过 API 添加下载任务最直接的方式：
 
 ```bash
-# 触发队列处理
-curl -X POST http://localhost:31471/process -d "QUEUE_PROCESS"
+# 添加单个视频到队列
+curl -X POST http://localhost:31471/api/addvideo/STCV-336
 ```
 
 ### 查看队列状态
@@ -121,7 +122,7 @@ curl -X POST http://localhost:31471/process -d "QUEUE_PROCESS"
 # 查看队列内容
 docker-compose exec nassav-api cat db/download_queue.txt
 
-# 查看工作状态（0=空闲，1=忙碌）
+# 查看工作状态（0=空闲，2=队列处理中）
 docker-compose exec nassav-api cat work
 ```
 

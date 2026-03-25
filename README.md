@@ -147,16 +147,18 @@ go build -o main
 
 2. 发送下载请求：
 ```bash
-curl -X POST http://127.0.0.1:49530/process -d "车牌号"
+curl -X POST http://127.0.0.1:31471/api/addvideo/FPRE-017
 ```
 
 ### 前后端服务
 
 刮削时下载了大量fanart，故提供一个网页预览。
 
-后端提供了两个API：
-1. 获取车牌号列表：/api/videos
-2. 获取车牌号详细信息：/api/videos/FPRE-017
+后端提供的API：
+1. **获取车牌号列表**：GET /api/videos
+2. **获取车牌号详细信息**：GET /api/videos/FPRE-017
+3. **添加下载任务**：POST /api/addvideo/FPRE-017
+4. **获取视频文件**：GET /file/FPRE-017/FPRE-017.mp4
 
 请求结果如下：
 ```
