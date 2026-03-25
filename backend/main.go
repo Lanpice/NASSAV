@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -18,8 +17,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 // 服务器配置
@@ -95,11 +92,14 @@ func main() {
 	// 启动定时缓存更新
 	go startCacheUpdater(30 * time.Minute)
 
+	// 启动定时队列处理
+	go startQueueProcessor(30 * time.Second)
+
 	// 设置路由
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/videos", listVideosHandler)
 	mux.HandleFunc("/api/videos/", videoDetailHandler)
-	mux.HandleFunc("/api/addvideo/", addVideoHandler)
+	mux.HandleFunc("/process", processHandler)
 	mux.HandleFunc("/file/", imageHandler)
 
 	// 包装CORS中间件
@@ -115,6 +115,109 @@ func main() {
 	log.Fatal(http.Serve(listener6, handler))
 
 	logger.Printf("Server started on port %s (IPv6, with IPv4 compatibility)", port)
+}
+
+// startQueueProcessor 定时处理下载队列
+func startQueueProcessor(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		logger.Println("Starting scheduled queue processing...")
+		processDownloadQueue()
+	}
+}
+
+// processDownloadQueue 处理下载队列
+func processDownloadQueue() {
+	queuePath := "/app/db/download_queue.txt"
+	workFile := "/app/work"
+
+	// 检查是否有正在运行的任务
+	if content, err := os.ReadFile(workFile); err == nil {
+		if strings.TrimSpace(string(content)) == "1" {
+			logger.Println("Download task is running, skipping queue processing")
+			return
+		}
+	}
+
+	// 检查队列文件是否存在且非空
+	if _, err := os.Stat(queuePath); os.IsNotExist(err) {
+		return // 队列为空
+	}
+
+	// 读取队列文件
+	content, err := os.ReadFile(queuePath)
+	if err != nil {
+		logger.Printf("Error reading queue file: %v", err)
+		return
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(content)), "\n")
+	if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
+		return // 队列为空
+	}
+
+	// 获取第一个有效任务
+	var taskID string
+	var remainingLines []string
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" && taskID == "" {
+			taskID = strings.ToUpper(line)
+		} else if line != "" {
+			remainingLines = append(remainingLines, line)
+		}
+	}
+
+	if taskID == "" {
+		return // 没有有效任务
+	}
+
+	logger.Printf("Processing queue task: %s", taskID)
+
+	// 立即从队列中移除任务，避免重复处理
+	newContent := strings.Join(remainingLines, "\n")
+	if len(remainingLines) > 0 {
+		newContent += "\n"
+	}
+	if err := os.WriteFile(queuePath, []byte(newContent), 0644); err != nil {
+		logger.Printf("Error updating queue file: %v", err)
+		return
+	}
+
+	// 设置工作状态为队列处理模式 (2)
+	if err := os.WriteFile(workFile, []byte("2"), 0644); err != nil {
+		logger.Printf("Error setting work status: %v", err)
+		return
+	}
+
+	// 异步执行下载任务
+	go func() {
+		defer func() {
+			// 清理工作状态
+			if err := os.WriteFile(workFile, []byte("0"), 0644); err != nil {
+				logger.Printf("Error resetting work status: %v", err)
+			}
+		}()
+
+		// 使用环境变量告诉 Python 这是队列处理模式
+		cmd := exec.Command("/app/venv/bin/python3", "/app/main.py", taskID)
+		cmd.Env = append(os.Environ(), "QUEUE_MODE=1")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			logger.Printf("Queue download failed for %s: %v\nOutput: %s", taskID, err, string(output))
+			// 如果下载失败，重新添加到队列末尾
+			currentContent, readErr := os.ReadFile(queuePath)
+			if readErr == nil {
+				newContent := strings.TrimSpace(string(currentContent)) + "\n" + taskID + "\n"
+				os.WriteFile(queuePath, []byte(newContent), 0644)
+			}
+		} else {
+			logger.Printf("Queue download completed for %s\nOutput: %s", taskID, string(output))
+		}
+	}()
 }
 
 // startCacheUpdater 定时更新缓存
@@ -432,85 +535,83 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, imagePath)
 }
 
-// downloadQueueHandler 新增下载队列
-func addVideoHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+// processHandler 处理下载请求（简化版本）
+// 支持: curl -X POST http://127.0.0.1:31471/process -d "STCV-336"
+func processHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
 		httpError(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// 从请求头获取API密钥
-	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" {
-		http.Error(w, "Authorization header missing", http.StatusUnauthorized)
-		return
-	}
-
-	// 验证API密钥
-	if !strings.HasPrefix(authHeader, "Bearer ") {
-		http.Error(w, "Invalid authorization format", http.StatusUnauthorized)
-		return
-	}
-
-	token := strings.TrimPrefix(authHeader, "Bearer ")
-	if token != apiKey {
-		http.Error(w, "Invalid API key", http.StatusUnauthorized)
-		return
-	}
-
 	// 读取请求体
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		httpError(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	videoID := strings.TrimSpace(string(body))
+	if videoID == "" {
+		httpError(w, "Video ID is required", http.StatusBadRequest)
+		return
+	}
+
+	// 规范化ID（大写）
+	videoID = strings.ToUpper(videoID)
+	logger.Printf("Received download request for: %s", videoID)
+
+	// 异步调用 Python 脚本进行下载
+	go func() {
+		cmd := exec.Command("/app/venv/bin/python3", "/app/main.py", videoID)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			logger.Printf("Download failed for %s: %v\nOutput: %s", videoID, err, string(output))
+		} else {
+			logger.Printf("Download started for %s\nOutput: %s", videoID, string(output))
+		}
+	}()
+
+	// 立即返回响应
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Download started for: %s\n", videoID)
+}
+
+// addVideoHandler 保留用于向后兼容
+// Deprecated: 使用 processHandler 替代
+func addVideoHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httpError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
 	videoID := strings.TrimPrefix(r.URL.Path, "/api/addvideo/")
 	if videoID == "" {
 		httpError(w, "Invalid video ID", http.StatusBadRequest)
 		return
 	}
 
-	// 将请求体转换为字符串，强制大写
-	id := strings.ToUpper(string(videoID))
-	if id == "" {
-		http.Error(w, "ID is required", http.StatusBadRequest)
-		return
-	}
-	logger.Printf("Received ID: %s\n", id)
+	videoID = strings.ToUpper(videoID)
+	logger.Printf("Received download request for: %s", videoID)
 
-	// 检查sqlite里面是否有这个车牌号
-	db, err := sql.Open("sqlite3", "../db/downloaded.db")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer db.Close()
+	// 异步调用 Python 脚本
+	go func() {
+		cmd := exec.Command("/app/venv/bin/python3", "/app/main.py", videoID)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			logger.Printf("Download failed for %s: %v\nOutput: %s", videoID, err, string(output))
+		} else {
+			logger.Printf("Download started for %s\nOutput: %s", videoID, string(output))
+		}
+	}()
 
-	exists, err := checkStringExists(db, id)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	response := fmt.Sprintf("%s already downloaded", id)
-	// 执行Python脚本
-	if !exists {
-		response = fmt.Sprintf("Add %s to download queue", id)
-		go func() {
-			cmd := exec.Command("sh", "-c", fmt.Sprintf("cd .. && python3 main.py %s", id))
-			err := cmd.Run()
-			if err != nil {
-				logger.Printf("command exec failed: %v", err)
-			} else {
-				logger.Printf("command exec succ!")
-			}
-		}()
-	}
-	logger.Println(response)
-
-	// 设置响应内容类型
-	w.Header().Set("Content-Type", "text/plain")
-	w.Write([]byte(response))
-}
-
-func checkStringExists(db *sql.DB, target string) (bool, error) {
-	var exists bool
-	query := "SELECT EXISTS(SELECT 1 FROM MissAV WHERE bvid = ? LIMIT 1)"
-	err := db.QueryRow(query, target).Scan(&exists)
-	return exists, err
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "success",
+		"message": fmt.Sprintf("Download started for: %s", videoID),
+	})
 }
 
 // httpError 统一的HTTP错误响应

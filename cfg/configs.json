@@ -3,8 +3,8 @@
     "SavePath": "/vol2/1000/MissAV",
     "DBPath": "./db/downloaded.db",
     "QueuePath": "./db/download_queue.txt",
-    "Proxy": "http://127.0.0.1:7897",
-    "IsNeedVideoProxy": true,
+    "Proxy": "",
+    "IsNeedVideoProxy": false,
     "ScraperDomain": [
         "www.javbus.com",
         "www.busdmm.ink",
@@ -24,7 +24,7 @@
         {
             "downloaderName": "HohoJ",
             "domain": "hohoj.tv",
-            "weight": 400
+            "weight": 1600
         },
         {
             "downloaderName": "Memo",

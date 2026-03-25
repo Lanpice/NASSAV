@@ -1,0 +1,58 @@
+# HTTP API 服务器 Dockerfile
+# 用于构建和部署 NASSAV HTTP API 服务
+
+FROM golang:1.22-alpine AS m3u8-builder
+
+WORKDIR /build
+
+RUN apk add --no-cache git
+
+RUN git clone https://github.com/Greyh4t/m3u8-Downloader-Go.git src && \
+    cd src && git checkout tags/v1.5.2 && \
+    go build -o /build/m3u8-Downloader-Go
+
+# Go 后端服务编译阶段
+FROM golang:1.22-alpine AS api-builder
+
+WORKDIR /build
+
+# 安装编译依赖
+RUN apk add --no-cache gcc musl-dev sqlite-dev
+
+COPY backend /build
+
+RUN go mod download && \
+    CGO_ENABLED=1 GOOS=linux go build -o /build/api-server
+
+# 最终运行阶段
+FROM alpine:latest
+
+WORKDIR /app
+
+# 安装必要的系统依赖
+RUN apk add --no-cache ffmpeg python3 ca-certificates
+
+# 第1步：复制应用代码
+COPY . .
+
+# 创建工作状态文件
+RUN echo "0" > work
+
+# 第2步：创建虚拟环境
+RUN python3 -m venv /app/venv
+
+# 第3步：安装 Python 依赖到虚拟环境
+RUN /app/venv/bin/pip install --no-cache-dir --upgrade pip && \
+    /app/venv/bin/pip install --no-cache-dir -r requirements.txt
+
+# 复制编译好的工具
+COPY --from=m3u8-builder /build/m3u8-Downloader-Go tools/m3u8-Downloader-Go
+
+# 复制编译好的 Go API 服务器
+COPY --from=api-builder /build/api-server ./api-server
+
+# 暴露 API 服务端口
+EXPOSE 31471
+
+# 运行 HTTP API 服务器
+ENTRYPOINT ["./api-server"]

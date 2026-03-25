@@ -133,3 +133,5 @@ coverage/
 Thumbs.db
 
 downloaded.db
+
+storage/

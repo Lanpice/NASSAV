@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  # NASSAV HTTP API 服务
+  nassav-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: nassav-api
+    ports:
+      - "31471:31471"
+    volumes:
+      # 视频存储目录
+      - ./storage:/vol2/1000/MissAV
+      # 数据库目录
+      - ./db:/app/db
+      # 日志目录
+      - ./logs:/app/logs
+      # 配置文件
+      - ./cfg:/app/cfg
+    environment:
+      # 可选：设置代理
+      # HTTP_PROXY: "http://proxy.example.com:7897"
+      # HTTPS_PROXY: "http://proxy.example.com:7897"
+      TZ: Asia/Shanghai
+    restart: unless-stopped
+    networks:
+      - nassav-network
+
+  # 可选：Nginx 前端服务
+  # 需要先执行 cd frontend && npm run build
+  nassav-frontend:
+    image: nginx:alpine
+    container_name: nassav-frontend
+    ports:
+      - "5177:80"
+    volumes:
+      - ./frontend/dist:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - nassav-api
+    restart: unless-stopped
+    networks:
+      - nassav-network
+
+networks:
+  nassav-network:
+    driver: bridge
+
